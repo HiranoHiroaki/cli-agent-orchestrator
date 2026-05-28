@@ -99,7 +99,8 @@
 ### P0（次に実施）
 1. evidenceチェックの write経路強制: 実装済み
 2. AI入力ペイロード最小化（監査ログ遮断）: 実装済み（agent view）
-3. debugの既定OFF運用をドキュメント化
+3. debugの既定OFF運用をドキュメント化: 実装済み
+  - `docs/deterministic-runner-debug.md`
 
 ### P1（次ステップ）
 1. `openziti/llm-gateway` 実接続: 実装済み（probe）
