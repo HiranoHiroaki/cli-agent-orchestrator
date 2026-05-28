@@ -22,6 +22,16 @@ REQUIRED_EVIDENCE_KEYS = (
     "patch_path",
     "log_path",
 )
+AGENT_SAFE_DETAIL_KEYS = (
+    "from",
+    "to",
+    "reason",
+    "patch_id",
+    "status",
+    "queue_depth",
+    "requested_next_state",
+    "missing",
+)
 
 
 def now_iso() -> str:
@@ -194,6 +204,47 @@ class RunnerDB:
             row = self._get_task_row(conn, task_id)
         return Task(**dict(row)) if row else None
 
+    def get_agent_view(self, task_id: str) -> dict[str, Any]:
+        task = self.get_task(task_id)
+        if task is None:
+            raise ValueError(f"task not found: {task_id}")
+        payload = json.loads(task.payload_json)
+        evidence = payload.get("evidence", {})
+        safe_evidence = {
+            "prompt_path": str(evidence.get("prompt_path", "")),
+            "constraints_path": str(evidence.get("constraints_path", "")),
+            "decision_path": str(evidence.get("decision_path", "")),
+            "patch_path": str(evidence.get("patch_path", "")),
+        }
+        safe_events: list[dict[str, Any]] = []
+        for event in self.list_events(task_id)[-20:]:
+            detail = json.loads(str(event["detail_json"]))
+            safe_detail = {
+                key: value for key, value in detail.items() if key in AGENT_SAFE_DETAIL_KEYS
+            }
+            safe_events.append(
+                {
+                    "id": event["id"],
+                    "created_at": event["created_at"],
+                    "actor": event["actor"],
+                    "event_type": event["event_type"],
+                    "detail": safe_detail,
+                }
+            )
+        return {
+            "task": {
+                "id": task.id,
+                "title": task.title,
+                "state": task.state,
+                "owner": task.owner,
+                "priority": task.priority,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+                "evidence": safe_evidence,
+            },
+            "events": safe_events,
+        }
+
     def list_events(self, task_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -233,6 +284,7 @@ class RunnerDB:
         reject_reason: str = "",
         apply_log: str = "",
     ) -> None:
+        blocked_error = ""
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id, task_id, status FROM patch_queue WHERE id = ?",
@@ -240,29 +292,42 @@ class RunnerDB:
             ).fetchone()
             if row is None:
                 raise ValueError(f"patch not found: {patch_id}")
-            now = now_iso()
-            conn.execute(
-                """
-                UPDATE patch_queue
-                SET status = ?, approved_by = ?, reject_reason = ?, apply_log = ?, updated_at = ?,
-                    applied_at = CASE WHEN ? = 'APPLIED' THEN ? ELSE applied_at END
-                WHERE id = ?
-                """,
-                (status, approved_by, reject_reason, apply_log, now, status, now, patch_id),
-            )
-            self.add_event(
-                conn,
-                str(row["task_id"]),
-                "runner",
-                "PATCH_STATUS_CHANGED",
-                {
-                    "patch_id": patch_id,
-                    "from": str(row["status"]),
-                    "to": status,
-                    "approved_by": approved_by or "",
-                    "reject_reason": reject_reason,
-                },
-            )
+            task_id = str(row["task_id"])
+            if status in {"APPROVED", "APPLIED"}:
+                blocked_error = self._assert_evidence_complete_or_fail_closed_with_conn(
+                    conn=conn,
+                    task_id=task_id,
+                    actor="runner",
+                    action=f"PATCH_{status}",
+                )
+            if blocked_error:
+                pass
+            else:
+                now = now_iso()
+                conn.execute(
+                    """
+                    UPDATE patch_queue
+                    SET status = ?, approved_by = ?, reject_reason = ?, apply_log = ?, updated_at = ?,
+                        applied_at = CASE WHEN ? = 'APPLIED' THEN ? ELSE applied_at END
+                    WHERE id = ?
+                    """,
+                    (status, approved_by, reject_reason, apply_log, now, status, now, patch_id),
+                )
+                self.add_event(
+                    conn,
+                    task_id,
+                    "runner",
+                    "PATCH_STATUS_CHANGED",
+                    {
+                        "patch_id": patch_id,
+                        "from": str(row["status"]),
+                        "to": status,
+                        "approved_by": approved_by or "",
+                        "reject_reason": reject_reason,
+                    },
+                )
+        if blocked_error:
+            raise ValueError(blocked_error)
 
     def list_patches(self, status: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -289,6 +354,7 @@ class RunnerDB:
         return [dict(row) for row in rows]
 
     def apply_patch(self, patch_id: int, actor: str) -> None:
+        blocked_error = ""
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT id, task_id, patch_path, status FROM patch_queue WHERE id = ?",
@@ -298,7 +364,16 @@ class RunnerDB:
                 raise ValueError(f"patch not found: {patch_id}")
             if str(row["status"]) != "APPROVED":
                 raise ValueError(f"patch not approved: {patch_id}")
+            task_id = str(row["task_id"])
+            blocked_error = self._assert_evidence_complete_or_fail_closed_with_conn(
+                conn=conn,
+                task_id=task_id,
+                actor=actor,
+                action="PATCH_APPLY",
+            )
             patch_path = str(row["patch_path"])
+        if blocked_error:
+            raise ValueError(blocked_error)
         check = subprocess.run(
             ["git", "apply", "--check", patch_path],
             capture_output=True,
@@ -308,10 +383,10 @@ class RunnerDB:
         if check.returncode != 0:
             log = (check.stdout + "\n" + check.stderr).strip()
             self.set_patch_status(patch_id, "APPLY_FAILED", apply_log=log)
-            self.set_state(str(row["task_id"]), "FAILED_CLOSED", actor=actor, reason="PATCH_APPLY_FAILED")
+            self.set_state(task_id, "FAILED_CLOSED", actor=actor, reason="PATCH_APPLY_FAILED")
             emit_anchor(
                 "patch.apply.failed",
-                str(row["task_id"]),
+                task_id,
                 "FAILED_CLOSED",
                 "PATCH_APPLY_FAILED",
                 {"patch_id": patch_id},
@@ -326,10 +401,10 @@ class RunnerDB:
         if apply_result.returncode != 0:
             log = (apply_result.stdout + "\n" + apply_result.stderr).strip()
             self.set_patch_status(patch_id, "APPLY_FAILED", apply_log=log)
-            self.set_state(str(row["task_id"]), "FAILED_CLOSED", actor=actor, reason="PATCH_APPLY_FAILED")
+            self.set_state(task_id, "FAILED_CLOSED", actor=actor, reason="PATCH_APPLY_FAILED")
             emit_anchor(
                 "patch.apply.failed",
-                str(row["task_id"]),
+                task_id,
                 "FAILED_CLOSED",
                 "PATCH_APPLY_FAILED",
                 {"patch_id": patch_id},
@@ -342,7 +417,7 @@ class RunnerDB:
         )
         emit_anchor(
             "patch.apply.success",
-            str(row["task_id"]),
+            task_id,
             "PATCH_PROPOSED",
             "PATCH_APPLIED",
             {"patch_id": patch_id},
@@ -432,3 +507,43 @@ class RunnerDB:
             "STATE_CHANGED",
             {"from": current_state, "to": next_state, "reason": reason},
         )
+
+    def _assert_evidence_complete_or_fail_closed_with_conn(
+        self,
+        conn: sqlite3.Connection,
+        task_id: str,
+        actor: str,
+        action: str,
+    ) -> str:
+        task = self._get_task_row(conn, task_id)
+        if task is None:
+            raise ValueError(f"task not found: {task_id}")
+        missing = self._missing_evidence_keys(str(task["payload_json"]))
+        if not missing:
+            return ""
+        current_state = str(task["state"])
+        reason = f"MISSING_EVIDENCE:{','.join(missing)}"
+        if current_state != "FAILED_CLOSED":
+            self._transition_with_conn(
+                conn=conn,
+                task_id=task_id,
+                actor=actor,
+                current_state=current_state,
+                next_state="FAILED_CLOSED",
+                reason=reason,
+            )
+        self.add_event(
+            conn,
+            task_id,
+            actor,
+            "WRITE_BLOCKED_MISSING_EVIDENCE",
+            {"action": action, "missing": missing},
+        )
+        emit_anchor(
+            "evidence.fail_closed",
+            task_id,
+            "FAILED_CLOSED",
+            "MISSING_EVIDENCE",
+            {"missing": missing, "action": action},
+        )
+        return f"evidence incomplete for {action}: {','.join(missing)}"

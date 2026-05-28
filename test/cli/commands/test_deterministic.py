@@ -1,5 +1,7 @@
 """Tests for deterministic CLI command."""
 
+import json
+
 from click.testing import CliRunner
 
 from cli_agent_orchestrator.cli.commands.deterministic import deterministic
@@ -58,3 +60,20 @@ def test_set_evidence_command(tmp_path) -> None:
         ],
     )
     assert result.exit_code == 0
+
+
+def test_show_task_agent_view_hides_verbose_fields(tmp_path) -> None:
+    runner = CliRunner()
+    db_path = str(tmp_path / "runner.db")
+    runner.invoke(deterministic, ["--db", db_path, "init-db"])
+    created = runner.invoke(deterministic, ["--db", db_path, "create-task", "--title", "sample"])
+    task_id = created.output.strip()
+    show = runner.invoke(
+        deterministic,
+        ["--db", db_path, "show-task", "--task-id", task_id, "--view", "agent"],
+    )
+    assert show.exit_code == 0
+    payload = json.loads(show.output)
+    assert "task" in payload
+    assert "events" in payload
+    assert "log_path" not in payload["task"]["evidence"]

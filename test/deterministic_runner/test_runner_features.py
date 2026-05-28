@@ -19,6 +19,14 @@ def test_patch_approval_flow(tmp_path: Path) -> None:
     db = RunnerDB(db_path)
     db.init_db()
     task_id = db.create_task("patch flow")
+    db.update_evidence(
+        task_id,
+        prompt_path="tasks/sample/prompt.md",
+        constraints_path="tasks/sample/constraints.md",
+        decision_path="tasks/sample/decision.md",
+        patch_path="tasks/sample/final.patch",
+        log_path="tasks/sample/run.log",
+    )
     db.enqueue_patch(task_id, "dummy.patch")
     patch = db.list_patches()[0]
     db.set_patch_status(int(patch["id"]), status="APPROVED", approved_by="human")
@@ -63,6 +71,22 @@ def test_missing_evidence_for_patch_proposed_fails_closed(tmp_path: Path) -> Non
     db.set_state(task_id, "READY_FOR_AGENT", actor="runner")
     db.set_state(task_id, "RUNNING_AGENT", actor="runner")
     db.set_state(task_id, "PATCH_PROPOSED", actor="runner")
+    task = db.get_task(task_id)
+    assert task is not None
+    assert task.state == "FAILED_CLOSED"
+
+
+def test_missing_evidence_blocks_patch_approval_and_fails_closed(tmp_path: Path) -> None:
+    db = RunnerDB(str(tmp_path / "runner.db"))
+    db.init_db()
+    task_id = db.create_task("blocked approve")
+    db.set_state(task_id, "CONTEXT_COLLECTING", actor="runner")
+    db.set_state(task_id, "READY_FOR_AGENT", actor="runner")
+    db.set_state(task_id, "RUNNING_AGENT", actor="runner")
+    db.enqueue_patch(task_id, "dummy.patch")
+    patch = db.list_patches()[0]
+    with pytest.raises(ValueError):
+        db.set_patch_status(int(patch["id"]), status="APPROVED", approved_by="human")
     task = db.get_task(task_id)
     assert task is not None
     assert task.state == "FAILED_CLOSED"

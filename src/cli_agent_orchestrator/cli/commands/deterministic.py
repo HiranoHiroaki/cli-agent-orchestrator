@@ -57,9 +57,17 @@ def set_state(ctx: click.Context, task_id: str, state: str, actor: str, reason: 
 
 @deterministic.command("show-task")
 @click.option("--task-id", required=True)
+@click.option("--view", type=click.Choice(["human", "agent"]), default="human")
 @click.pass_context
-def show_task(ctx: click.Context, task_id: str) -> None:
+def show_task(ctx: click.Context, task_id: str, view: str) -> None:
     db: RunnerDB = ctx.obj["db"]
+    if view == "agent":
+        try:
+            payload = db.get_agent_view(task_id)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+        click.echo(json.dumps(payload, ensure_ascii=True, indent=2))
+        return
     task = db.get_task(task_id)
     if task is None:
         raise click.ClickException(f"task not found: {task_id}")
@@ -121,7 +129,10 @@ def list_patches(ctx: click.Context, status: str | None) -> None:
 @click.pass_context
 def approve_patch(ctx: click.Context, patch_id: int, approved_by: str) -> None:
     db: RunnerDB = ctx.obj["db"]
-    db.set_patch_status(patch_id, "APPROVED", approved_by=approved_by)
+    try:
+        db.set_patch_status(patch_id, "APPROVED", approved_by=approved_by)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     click.echo(f"approved: {patch_id}")
 
 
@@ -141,7 +152,10 @@ def reject_patch(ctx: click.Context, patch_id: int, reason: str) -> None:
 @click.pass_context
 def apply_approved_patch(ctx: click.Context, patch_id: int, actor: str) -> None:
     db: RunnerDB = ctx.obj["db"]
-    db.apply_patch(patch_id, actor=actor)
+    try:
+        db.apply_patch(patch_id, actor=actor)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     click.echo(f"apply attempted: {patch_id}")
 
 
