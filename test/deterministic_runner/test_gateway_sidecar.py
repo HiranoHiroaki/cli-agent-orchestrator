@@ -88,3 +88,22 @@ def test_probe_gateway_timeout_maps_to_local_model_timeout(tmp_path, monkeypatch
     with pytest.raises(LocalModelTimeoutError):
         probe_gateway_sidecar(str(config_path), lane_name="code", timeout_ms=1000)
 
+
+def test_probe_gateway_rejects_non_local_http_host(tmp_path) -> None:
+    config_path = tmp_path / "lane.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "gateway": {
+                    "enabled": True,
+                    "base_url": "http://example.com:8080",
+                    "allowed_hosts": ["example.com"],
+                    "allow_http_localhost_only": True,
+                },
+                "lanes": {"code": {"model": "gpt-oss:120b", "timeout_ms": 1000, "max_queue": 1}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError):
+        probe_gateway_sidecar(str(config_path), lane_name="code", timeout_ms=1000)

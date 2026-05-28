@@ -3,10 +3,13 @@
 from dataclasses import dataclass
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 from cli_agent_orchestrator.deterministic_runner.debug import emit_anchor
+
+LOCAL_GATEWAY_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 @dataclass
@@ -35,6 +38,8 @@ class GatewayConfig:
     probe_prompt: str
     probe_max_tokens: int
     busy_status_codes: tuple[int, ...]
+    allowed_hosts: tuple[str, ...]
+    allow_http_localhost_only: bool
 
 
 def _read_json(path: str) -> dict[str, Any]:
@@ -82,6 +87,12 @@ def load_gateway_config(config_path: str) -> GatewayConfig:
     busy_codes_raw = raw.get("busy_status_codes", [429, 503])
     if not isinstance(busy_codes_raw, list):
         busy_codes_raw = [429, 503]
+    allowed_hosts_raw = raw.get("allowed_hosts", sorted(LOCAL_GATEWAY_HOSTS))
+    if not isinstance(allowed_hosts_raw, list):
+        allowed_hosts_raw = sorted(LOCAL_GATEWAY_HOSTS)
+    allowed_hosts = tuple(str(host).strip().lower() for host in allowed_hosts_raw if str(host).strip())
+    if not allowed_hosts:
+        allowed_hosts = tuple(sorted(LOCAL_GATEWAY_HOSTS))
     return GatewayConfig(
         enabled=bool(raw.get("enabled", False)),
         base_url=str(raw.get("base_url", "")).strip().rstrip("/"),
@@ -92,6 +103,8 @@ def load_gateway_config(config_path: str) -> GatewayConfig:
         probe_prompt=str(raw.get("probe_prompt", "ping")).strip() or "ping",
         probe_max_tokens=int(raw.get("probe_max_tokens", 1)),
         busy_status_codes=tuple(int(code) for code in busy_codes_raw),
+        allowed_hosts=allowed_hosts,
+        allow_http_localhost_only=bool(raw.get("allow_http_localhost_only", True)),
     )
 
 
@@ -108,6 +121,7 @@ def probe_gateway_sidecar(
         return
     if not gateway.base_url:
         raise RuntimeError("GATEWAY_CONFIG_ERROR: base_url missing")
+    _validate_gateway_destination(gateway)
     model = str(lane.get("model", "")).strip() if isinstance(lane, dict) else ""
     timeout_sec = max(1.0, timeout_ms / 1000)
     headers = {"Content-Type": "application/json"}
@@ -179,3 +193,17 @@ def probe_gateway_sidecar(
             "GATEWAY_PROBE_OK",
             {"status_code": resp.status_code, "lane": lane_name},
         )
+
+
+def _validate_gateway_destination(gateway: GatewayConfig) -> None:
+    parsed = urlparse(gateway.base_url)
+    host = (parsed.hostname or "").strip().lower()
+    scheme = (parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"}:
+        raise RuntimeError(f"GATEWAY_CONFIG_ERROR: invalid scheme '{scheme}'")
+    if not host:
+        raise RuntimeError("GATEWAY_CONFIG_ERROR: host missing")
+    if host not in set(gateway.allowed_hosts):
+        raise RuntimeError(f"GATEWAY_CONFIG_ERROR: host '{host}' not allowed")
+    if scheme == "http" and gateway.allow_http_localhost_only and host not in LOCAL_GATEWAY_HOSTS:
+        raise RuntimeError(f"GATEWAY_CONFIG_ERROR: insecure http host '{host}' is not allowed")

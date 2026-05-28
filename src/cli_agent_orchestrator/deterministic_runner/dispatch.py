@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -15,6 +16,15 @@ from cli_agent_orchestrator.deterministic_runner.gateway import (
     probe_gateway_sidecar,
 )
 from cli_agent_orchestrator.deterministic_runner.readonly import assert_readonly_policy
+
+ALLOWED_AGENT_EXECUTABLES = {"codex", "claude"}
+BLOCKED_COMMAND_ARGS = {
+    "--yolo",
+    "--dangerously-skip-permissions",
+    "--trust-all-tools",
+    "--allow-all",
+    "--skip-permissions",
+}
 
 
 @dataclass
@@ -69,6 +79,8 @@ def run_agent(
     enforce_readonly_mcp: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     agent = load_agent(profile_path, agent_name)
+    command = shlex.split(agent.command, posix=False)
+    _validate_agent_command(agent_name, command)
     if enforce_readonly_mcp:
         assert_readonly_policy(
             agent_name=agent_name,
@@ -83,7 +95,6 @@ def run_agent(
         timeout_ms=lane_policy.timeout_ms,
         task_id=task_id,
     )
-    command = shlex.split(agent.command, posix=False)
     command.extend(["--prompt-file", os.path.abspath(prompt_path)])
     if task_id:
         emit_anchor(
@@ -120,3 +131,29 @@ def run_agent(
                 {"agent": agent_name},
             )
         raise LocalModelTimeoutError("LOCAL_MODEL_TIMEOUT") from exc
+
+
+def _validate_agent_command(agent_name: str, command: list[str]) -> None:
+    if not command:
+        raise ValueError(f"{agent_name}: command is empty")
+    executable = Path(command[0]).name.lower()
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    if executable.endswith(".cmd"):
+        executable = executable[:-4]
+    if executable not in ALLOWED_AGENT_EXECUTABLES:
+        raise ValueError(
+            f"{agent_name}: unsupported executable '{command[0]}'; "
+            f"allowed: {','.join(sorted(ALLOWED_AGENT_EXECUTABLES))}"
+        )
+    blocked = [arg for arg in command[1:] if _is_blocked_arg(arg)]
+    if blocked:
+        raise ValueError(f"{agent_name}: blocked command arguments: {','.join(sorted(set(blocked)))}")
+
+
+def _is_blocked_arg(arg: str) -> bool:
+    normalized = arg.strip().lower()
+    for blocked in BLOCKED_COMMAND_ARGS:
+        if normalized == blocked or normalized.startswith(f"{blocked}="):
+            return True
+    return False

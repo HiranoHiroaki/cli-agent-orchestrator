@@ -1,6 +1,7 @@
 """Deterministic runner commands."""
 
 import json
+import re
 
 import click
 
@@ -12,6 +13,16 @@ from cli_agent_orchestrator.deterministic_runner.gateway import (
 )
 from cli_agent_orchestrator.deterministic_runner.lock_manager import LockManager, LockSpec
 from cli_agent_orchestrator.deterministic_runner.test_runner_mcp import run_allowlisted
+
+MAX_EVENT_OUTPUT_CHARS = 4000
+_REDACTION_PATTERNS = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"(?i)(aws_secret_access_key|aws_session_token|api[_-]?key|token|password)\s*[:=]\s*([^\s]+)"),
+    re.compile(
+        r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----",
+        re.MULTILINE,
+    ),
+)
 
 
 @click.group()
@@ -200,7 +211,6 @@ def release_lock(
 @click.option("--lane-config", required=True)
 @click.option("--prompt-path", required=True)
 @click.option("--queue-depth", default=0, type=int)
-@click.option("--readonly-mcp/--no-readonly-mcp", default=True)
 @click.pass_context
 def dispatch_agent(
     ctx: click.Context,
@@ -210,7 +220,6 @@ def dispatch_agent(
     lane_config: str,
     prompt_path: str,
     queue_depth: int,
-    readonly_mcp: bool,
 ) -> None:
     db: RunnerDB = ctx.obj["db"]
     db.set_state(task_id, "RUNNING_AGENT", actor="runner", reason="dispatch")
@@ -222,7 +231,7 @@ def dispatch_agent(
             prompt_path,
             queue_depth,
             task_id=task_id,
-            enforce_readonly_mcp=readonly_mcp,
+            enforce_readonly_mcp=True,
         )
     except LocalModelBusyError:
         db.log_event(task_id, "gateway", "LOCAL_MODEL_BUSY", {"queue_depth": queue_depth})
@@ -245,7 +254,13 @@ def dispatch_agent(
         task_id,
         actor=agent,
         event_type="AGENT_DISPATCH_RESULT",
-        detail={"exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
+        detail={
+            "exit_code": result.returncode,
+            "stdout": _sanitize_output(result.stdout),
+            "stderr": _sanitize_output(result.stderr),
+            "stdout_length": len(result.stdout or ""),
+            "stderr_length": len(result.stderr or ""),
+        },
     )
     if result.returncode != 0:
         db.set_state(task_id, "FAILED_CLOSED", actor="runner", reason="AGENT_EXIT_NONZERO")
@@ -263,3 +278,12 @@ def run_test_command(key: str) -> None:
     click.echo(result.stdout, nl=False)
     if result.returncode != 0:
         raise click.ClickException(f"test command failed: {key}")
+
+
+def _sanitize_output(text: str | None) -> str:
+    value = text or ""
+    for pattern in _REDACTION_PATTERNS:
+        value = pattern.sub("[REDACTED]", value)
+    if len(value) > MAX_EVENT_OUTPUT_CHARS:
+        value = value[:MAX_EVENT_OUTPUT_CHARS] + "\n...[TRUNCATED]..."
+    return value

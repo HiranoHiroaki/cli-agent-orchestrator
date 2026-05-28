@@ -61,13 +61,19 @@ def _start_gateway_server() -> tuple[HTTPServer, threading.Thread, int]:
     return server, thread, port
 
 
-def _write_profile(path: Path) -> None:
+def _create_fake_codex(tmp_path: Path) -> Path:
+    script_path = tmp_path / "codex.cmd"
+    script_path.write_text("@echo off\r\necho ok\r\nexit /b 0\r\n", encoding="utf-8")
+    return script_path
+
+
+def _write_profile(path: Path, command: str) -> None:
     path.write_text(
         json.dumps(
             {
                 "agents": {
                     "codex_worker": {
-                        "command": 'python -c "print(\'ok\')"',
+                        "command": command,
                         "lane": "code",
                         "allowed_tools": ["fs_read", "fs_list", "@repo-read"],
                         "mcp_servers": ["repo-read"],
@@ -130,8 +136,9 @@ def test_dispatch_agent_transitions_on_gateway_busy(tmp_path: Path) -> None:
         profile_path = tmp_path / "agents.json"
         lane_path = tmp_path / "lanes.json"
         prompt_path = tmp_path / "prompt.md"
+        codex_path = _create_fake_codex(tmp_path)
         prompt_path.write_text("hello", encoding="utf-8")
-        _write_profile(profile_path)
+        _write_profile(profile_path, command=str(codex_path))
         _write_lane(lane_path, port, timeout_ms=1500)
         task_id = _prepare_task(runner, db_path, title="busy")
 
@@ -169,8 +176,9 @@ def test_dispatch_agent_transitions_on_gateway_timeout(tmp_path: Path) -> None:
         profile_path = tmp_path / "agents.json"
         lane_path = tmp_path / "lanes.json"
         prompt_path = tmp_path / "prompt.md"
+        codex_path = _create_fake_codex(tmp_path)
         prompt_path.write_text("hello", encoding="utf-8")
-        _write_profile(profile_path)
+        _write_profile(profile_path, command=str(codex_path))
         _write_lane(lane_path, port, timeout_ms=500)
         task_id = _prepare_task(runner, db_path, title="timeout")
 
@@ -208,8 +216,9 @@ def test_dispatch_agent_success_with_gateway_probe(tmp_path: Path) -> None:
         profile_path = tmp_path / "agents.json"
         lane_path = tmp_path / "lanes.json"
         prompt_path = tmp_path / "prompt.md"
+        codex_path = _create_fake_codex(tmp_path)
         prompt_path.write_text("hello", encoding="utf-8")
-        _write_profile(profile_path)
+        _write_profile(profile_path, command=str(codex_path))
         _write_lane(lane_path, port, timeout_ms=1500)
         task_id = _prepare_task(runner, db_path, title="ok")
         runner.invoke(
@@ -256,4 +265,3 @@ def test_dispatch_agent_success_with_gateway_probe(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         thread.join(timeout=2)
-

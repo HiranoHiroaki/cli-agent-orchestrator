@@ -4,7 +4,7 @@ import json
 
 from click.testing import CliRunner
 
-from cli_agent_orchestrator.cli.commands.deterministic import deterministic
+from cli_agent_orchestrator.cli.commands.deterministic import deterministic, _sanitize_output
 
 
 def test_cli_has_deterministic_command() -> None:
@@ -77,3 +77,12 @@ def test_show_task_agent_view_hides_verbose_fields(tmp_path) -> None:
     assert "task" in payload
     assert "events" in payload
     assert "log_path" not in payload["task"]["evidence"]
+
+
+def test_sanitize_output_redacts_and_truncates() -> None:
+    raw = "token=abc123\nAKIAABCDEFGHIJKLMNOP\n" + ("x" * 5000)
+    out = _sanitize_output(raw)
+    assert "AKIAABCDEFGHIJKLMNOP" not in out
+    assert "token=abc123" not in out
+    assert "[REDACTED]" in out
+    assert "...[TRUNCATED]..." in out
