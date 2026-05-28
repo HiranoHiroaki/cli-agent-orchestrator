@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -62,8 +63,13 @@ def _start_gateway_server() -> tuple[HTTPServer, threading.Thread, int]:
 
 
 def _create_fake_codex(tmp_path: Path) -> Path:
-    script_path = tmp_path / "codex.cmd"
-    script_path.write_text("@echo off\r\necho ok\r\nexit /b 0\r\n", encoding="utf-8")
+    if os.name == "nt":
+        script_path = tmp_path / "codex.cmd"
+        script_path.write_text("@echo off\r\necho ok\r\nexit /b 0\r\n", encoding="utf-8")
+        return script_path
+    script_path = tmp_path / "codex"
+    script_path.write_text("#!/usr/bin/env sh\necho ok\n", encoding="utf-8")
+    script_path.chmod(0o755)
     return script_path
 
 
