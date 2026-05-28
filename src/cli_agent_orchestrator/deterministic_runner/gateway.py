@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
+from cli_agent_orchestrator.deterministic_runner.debug import emit_anchor
+
 
 @dataclass
 class LanePolicy:
@@ -44,7 +46,14 @@ def load_lane_policy(config_path: str, lane_name: str) -> LanePolicy:
     )
 
 
-def enforce_queue_reject(policy: LanePolicy, queue_depth: int) -> None:
+def enforce_queue_reject(policy: LanePolicy, queue_depth: int, task_id: str = "") -> None:
     if policy.reject_on_queue_full and queue_depth >= policy.max_queue:
+        if task_id:
+            emit_anchor(
+                "gateway.queue.reject",
+                task_id,
+                "RUNNING_AGENT",
+                "LOCAL_MODEL_BUSY",
+                {"queue_depth": queue_depth, "max_queue": policy.max_queue},
+            )
         raise LocalModelBusyError("LOCAL_MODEL_BUSY")
-

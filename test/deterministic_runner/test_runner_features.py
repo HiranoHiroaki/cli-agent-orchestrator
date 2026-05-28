@@ -53,3 +53,16 @@ def test_allowlist_blocks_unknown_command() -> None:
     with pytest.raises(ValueError):
         run_allowlisted("unknown")
 
+
+def test_missing_evidence_for_patch_proposed_fails_closed(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "runner.db")
+    db = RunnerDB(db_path)
+    db.init_db()
+    task_id = db.create_task("missing evidence")
+    db.set_state(task_id, "CONTEXT_COLLECTING", actor="runner")
+    db.set_state(task_id, "READY_FOR_AGENT", actor="runner")
+    db.set_state(task_id, "RUNNING_AGENT", actor="runner")
+    db.set_state(task_id, "PATCH_PROPOSED", actor="runner")
+    task = db.get_task(task_id)
+    assert task is not None
+    assert task.state == "FAILED_CLOSED"

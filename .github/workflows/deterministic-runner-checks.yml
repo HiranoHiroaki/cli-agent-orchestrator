@@ -1,0 +1,29 @@
+name: deterministic-runner-checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  deterministic-runner-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run deterministic runner tests
+        run: |
+          uv run pytest test/cli/commands/test_deterministic.py \
+            test/deterministic_runner/test_state_machine.py \
+            test/deterministic_runner/test_runner_features.py
+

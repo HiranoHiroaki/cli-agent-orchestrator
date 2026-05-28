@@ -29,3 +29,32 @@ def test_deterministic_init_and_create_task(tmp_path) -> None:
     )
     assert result_create.exit_code == 0
     assert result_create.output.strip() != ""
+
+
+def test_set_evidence_command(tmp_path) -> None:
+    runner = CliRunner()
+    db_path = str(tmp_path / "runner.db")
+    runner.invoke(deterministic, ["--db", db_path, "init-db"])
+    created = runner.invoke(deterministic, ["--db", db_path, "create-task", "--title", "sample"])
+    task_id = created.output.strip()
+    result = runner.invoke(
+        deterministic,
+        [
+            "--db",
+            db_path,
+            "set-evidence",
+            "--task-id",
+            task_id,
+            "--prompt-path",
+            "tasks/sample/prompt.md",
+            "--constraints-path",
+            "tasks/sample/constraints.md",
+            "--decision-path",
+            "tasks/sample/decision.md",
+            "--patch-path",
+            "tasks/sample/final.patch",
+            "--log-path",
+            "tasks/sample/run.log",
+        ],
+    )
+    assert result.exit_code == 0

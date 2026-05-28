@@ -67,6 +67,35 @@ def show_task(ctx: click.Context, task_id: str) -> None:
     click.echo(json.dumps({"task": task.__dict__, "events": events}, ensure_ascii=True, indent=2))
 
 
+@deterministic.command("set-evidence")
+@click.option("--task-id", required=True)
+@click.option("--prompt-path", default="")
+@click.option("--constraints-path", default="")
+@click.option("--decision-path", default="")
+@click.option("--patch-path", default="")
+@click.option("--log-path", default="")
+@click.pass_context
+def set_evidence(
+    ctx: click.Context,
+    task_id: str,
+    prompt_path: str,
+    constraints_path: str,
+    decision_path: str,
+    patch_path: str,
+    log_path: str,
+) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.update_evidence(
+        task_id,
+        prompt_path=prompt_path,
+        constraints_path=constraints_path,
+        decision_path=decision_path,
+        patch_path=patch_path,
+        log_path=log_path,
+    )
+    click.echo("evidence updated")
+
+
 @deterministic.command("enqueue-patch")
 @click.option("--task-id", required=True)
 @click.option("--patch-path", required=True)
@@ -170,7 +199,14 @@ def dispatch_agent(
     db: RunnerDB = ctx.obj["db"]
     db.set_state(task_id, "RUNNING_AGENT", actor="runner", reason="dispatch")
     try:
-        result = run_agent(profile, lane_config, agent, prompt_path, queue_depth)
+        result = run_agent(
+            profile,
+            lane_config,
+            agent,
+            prompt_path,
+            queue_depth,
+            task_id=task_id,
+        )
     except LocalModelBusyError:
         db.log_event(task_id, "gateway", "LOCAL_MODEL_BUSY", {"queue_depth": queue_depth})
         db.set_state(task_id, "LOCAL_MODEL_BUSY", actor="runner", reason="immediate reject")
@@ -202,4 +238,3 @@ def run_test_command(key: str) -> None:
     click.echo(result.stdout, nl=False)
     if result.returncode != 0:
         raise click.ClickException(f"test command failed: {key}")
-
