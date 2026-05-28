@@ -4,7 +4,7 @@ import json
 
 from click.testing import CliRunner
 
-from cli_agent_orchestrator.cli.commands.deterministic import deterministic, _sanitize_output
+from cli_agent_orchestrator.cli.commands.deterministic import _sanitize_output, deterministic
 
 
 def test_cli_has_deterministic_command() -> None:

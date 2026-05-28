@@ -2,10 +2,10 @@
 
 import json
 import os
-from pathlib import Path
 import shlex
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from cli_agent_orchestrator.deterministic_runner.debug import emit_anchor
@@ -148,7 +148,9 @@ def _validate_agent_command(agent_name: str, command: list[str]) -> None:
         )
     blocked = [arg for arg in command[1:] if _is_blocked_arg(arg)]
     if blocked:
-        raise ValueError(f"{agent_name}: blocked command arguments: {','.join(sorted(set(blocked)))}")
+        raise ValueError(
+            f"{agent_name}: blocked command arguments: {','.join(sorted(set(blocked)))}"
+        )
 
 
 def _is_blocked_arg(arg: str) -> bool:

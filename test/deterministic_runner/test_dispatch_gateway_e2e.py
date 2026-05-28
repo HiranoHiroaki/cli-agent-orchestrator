@@ -122,8 +122,14 @@ def _prepare_task(runner: CliRunner, db_path: str, title: str = "e2e-task") -> s
     runner.invoke(deterministic, ["--db", db_path, "init-db"])
     created = runner.invoke(deterministic, ["--db", db_path, "create-task", "--title", title])
     task_id = created.output.strip()
-    runner.invoke(deterministic, ["--db", db_path, "set-state", "--task-id", task_id, "--state", "CONTEXT_COLLECTING"])
-    runner.invoke(deterministic, ["--db", db_path, "set-state", "--task-id", task_id, "--state", "READY_FOR_AGENT"])
+    runner.invoke(
+        deterministic,
+        ["--db", db_path, "set-state", "--task-id", task_id, "--state", "CONTEXT_COLLECTING"],
+    )
+    runner.invoke(
+        deterministic,
+        ["--db", db_path, "set-state", "--task-id", task_id, "--state", "READY_FOR_AGENT"],
+    )
     return task_id
 
 

@@ -21,4 +21,3 @@ def test_emit_anchor_respects_allowlist(caplog, monkeypatch) -> None:
         emit_anchor("dispatch.end", "task-1", "RUNNING_AGENT", "END", {})
     assert "dispatch.start" not in caplog.text
     assert "dispatch.end" in caplog.text
-

@@ -67,8 +67,7 @@ class RunnerDB:
 
     def init_db(self) -> None:
         with self.connect() as conn:
-            conn.executescript(
-                """
+            conn.executescript("""
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
@@ -111,8 +110,7 @@ class RunnerDB:
                     updated_at TEXT NOT NULL,
                     UNIQUE(kind, resource)
                 );
-                """
-            )
+                """)
 
     def create_task(
         self,
@@ -343,14 +341,12 @@ class RunnerDB:
                     (status,),
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    """
+                rows = conn.execute("""
                     SELECT id, task_id, patch_path, status, approved_by, reject_reason, apply_log, applied_at,
                            created_at, updated_at
                     FROM patch_queue
                     ORDER BY id DESC
-                    """
-                ).fetchall()
+                    """).fetchall()
         return [dict(row) for row in rows]
 
     def apply_patch(self, patch_id: int, actor: str) -> None:

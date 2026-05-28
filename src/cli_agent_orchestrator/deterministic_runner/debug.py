@@ -30,4 +30,3 @@ def emit_anchor(anchor_id: str, task_id: str, state: str, event_type: str, detai
         "detail": detail,
     }
     LOGGER.info("RUNNER_ANCHOR %s", json.dumps(payload, ensure_ascii=True))
-

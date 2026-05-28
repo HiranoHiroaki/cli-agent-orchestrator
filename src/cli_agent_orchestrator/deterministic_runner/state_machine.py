@@ -53,4 +53,3 @@ def can_transition(from_state: str, to_state: str) -> bool:
     if from_state not in TRANSITIONS:
         return False
     return to_state in TRANSITIONS[from_state]
-

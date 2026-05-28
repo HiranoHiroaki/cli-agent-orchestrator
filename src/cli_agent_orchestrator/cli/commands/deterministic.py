@@ -5,7 +5,11 @@ import re
 
 import click
 
-from cli_agent_orchestrator.deterministic_runner.db import DEFAULT_DB_PATH, DEFAULT_LOCK_DIR, RunnerDB
+from cli_agent_orchestrator.deterministic_runner.db import (
+    DEFAULT_DB_PATH,
+    DEFAULT_LOCK_DIR,
+    RunnerDB,
+)
 from cli_agent_orchestrator.deterministic_runner.dispatch import run_agent
 from cli_agent_orchestrator.deterministic_runner.gateway import (
     LocalModelBusyError,
@@ -17,7 +21,9 @@ from cli_agent_orchestrator.deterministic_runner.test_runner_mcp import run_allo
 MAX_EVENT_OUTPUT_CHARS = 4000
 _REDACTION_PATTERNS = (
     re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"(?i)(aws_secret_access_key|aws_session_token|api[_-]?key|token|password)\s*[:=]\s*([^\s]+)"),
+    re.compile(
+        r"(?i)(aws_secret_access_key|aws_session_token|api[_-]?key|token|password)\s*[:=]\s*([^\s]+)"
+    ),
     re.compile(
         r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----",
         re.MULTILINE,
@@ -50,7 +56,9 @@ def init_db(ctx: click.Context) -> None:
 @click.pass_context
 def create_task(ctx: click.Context, title: str, owner: str, priority: str, payload: str) -> None:
     db: RunnerDB = ctx.obj["db"]
-    task_id = db.create_task(title=title, owner=owner, priority=priority, payload=json.loads(payload))
+    task_id = db.create_task(
+        title=title, owner=owner, priority=priority, payload=json.loads(payload)
+    )
     click.echo(task_id)
 
 
@@ -176,9 +184,7 @@ def apply_approved_patch(ctx: click.Context, patch_id: int, actor: str) -> None:
 @click.option("--owner", default="runner")
 @click.option("--lock-dir", default=DEFAULT_LOCK_DIR, show_default=True)
 @click.pass_context
-def acquire_lock(
-    ctx: click.Context, kind: str, resource: str, owner: str, lock_dir: str
-) -> None:
+def acquire_lock(ctx: click.Context, kind: str, resource: str, owner: str, lock_dir: str) -> None:
     db: RunnerDB = ctx.obj["db"]
     manager = LockManager(lock_dir=lock_dir)
     with db.connect() as conn:
@@ -194,9 +200,7 @@ def acquire_lock(
 @click.option("--owner", default="runner")
 @click.option("--lock-dir", default=DEFAULT_LOCK_DIR, show_default=True)
 @click.pass_context
-def release_lock(
-    ctx: click.Context, kind: str, resource: str, owner: str, lock_dir: str
-) -> None:
+def release_lock(ctx: click.Context, kind: str, resource: str, owner: str, lock_dir: str) -> None:
     db: RunnerDB = ctx.obj["db"]
     manager = LockManager(lock_dir=lock_dir)
     with db.connect() as conn:

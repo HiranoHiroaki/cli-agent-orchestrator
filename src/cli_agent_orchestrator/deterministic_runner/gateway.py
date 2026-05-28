@@ -1,7 +1,7 @@
 """Lane policies and overload/timeout signals."""
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -90,7 +90,9 @@ def load_gateway_config(config_path: str) -> GatewayConfig:
     allowed_hosts_raw = raw.get("allowed_hosts", sorted(LOCAL_GATEWAY_HOSTS))
     if not isinstance(allowed_hosts_raw, list):
         allowed_hosts_raw = sorted(LOCAL_GATEWAY_HOSTS)
-    allowed_hosts = tuple(str(host).strip().lower() for host in allowed_hosts_raw if str(host).strip())
+    allowed_hosts = tuple(
+        str(host).strip().lower() for host in allowed_hosts_raw if str(host).strip()
+    )
     if not allowed_hosts:
         allowed_hosts = tuple(sorted(LOCAL_GATEWAY_HOSTS))
     return GatewayConfig(

@@ -55,4 +55,3 @@ class LockManager:
     def _lock_path(self, spec: LockSpec) -> str:
         safe_resource = spec.resource.replace(":", "_").replace("\\", "_").replace("/", "_")
         return os.path.join(self.lock_dir, f"{spec.kind}__{safe_resource}.lock")
-

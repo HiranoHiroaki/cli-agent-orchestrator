@@ -9,4 +9,3 @@ def test_local_model_busy_transition() -> None:
 
 def test_invalid_done_transition() -> None:
     assert not can_transition("CREATED", "DONE")
-

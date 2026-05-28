@@ -2,8 +2,8 @@
 
 import click
 
-from cli_agent_orchestrator.cli.commands.env import env
 from cli_agent_orchestrator.cli.commands.deterministic import deterministic
+from cli_agent_orchestrator.cli.commands.env import env
 from cli_agent_orchestrator.cli.commands.flow import flow
 from cli_agent_orchestrator.cli.commands.info import info
 from cli_agent_orchestrator.cli.commands.init import init

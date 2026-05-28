@@ -29,4 +29,3 @@ def test_readonly_policy_requires_repo_read_only() -> None:
             allowed_tools=["fs_read", "fs_list", "@repo-read"],
             mcp_servers=["repo-read", "test-runner"],
         )
-
