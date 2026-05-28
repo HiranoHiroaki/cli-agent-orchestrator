@@ -15,6 +15,7 @@ ALLOWED_COMMANDS: dict[str, list[str]] = {
         "test/deterministic_runner/test_readonly_policy.py",
         "test/deterministic_runner/test_dispatch_policy.py",
         "test/deterministic_runner/test_debug_logging.py",
+        "test/deterministic_runner/test_dispatch_gateway_e2e.py",
     ],
 }
 

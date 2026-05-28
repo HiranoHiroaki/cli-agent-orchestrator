@@ -104,7 +104,7 @@
 
 ### P1（次ステップ）
 1. `openziti/llm-gateway` 実接続: 実装済み（probe）
-2. lane別 reject/timeout をE2E確認: 未完（統合テストが残り）
+2. lane別 reject/timeout をE2E確認: 実装済み（ローカル統合テスト）
 
 ### P2（その次）
 1. MCP read-only プロファイル固定 (`repo-read` のみ): 実装済み（dispatch policy）
