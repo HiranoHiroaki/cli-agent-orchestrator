@@ -15,6 +15,13 @@ from cli_agent_orchestrator.deterministic_runner.state_machine import can_transi
 
 DEFAULT_DB_PATH = os.path.join(".cao", "deterministic_runner.db")
 DEFAULT_LOCK_DIR = os.path.join(".cao", "locks")
+REQUIRED_EVIDENCE_KEYS = (
+    "prompt_path",
+    "constraints_path",
+    "decision_path",
+    "patch_path",
+    "log_path",
+)
 
 
 def now_iso() -> str:
@@ -106,11 +113,8 @@ class RunnerDB:
     ) -> str:
         payload_obj = payload or {}
         evidence = payload_obj.setdefault("evidence", {})
-        evidence.setdefault("prompt_path", "")
-        evidence.setdefault("constraints_path", "")
-        evidence.setdefault("decision_path", "")
-        evidence.setdefault("patch_path", "")
-        evidence.setdefault("log_path", "")
+        for key in REQUIRED_EVIDENCE_KEYS:
+            evidence.setdefault(key, "")
         task_id = str(uuid4())
         created_at = now_iso()
         with self.connect() as conn:
@@ -146,21 +150,14 @@ class RunnerDB:
             if next_state in {"PATCH_PROPOSED", "TESTING", "DONE"}:
                 missing = self._missing_evidence_keys(str(task["payload_json"]))
                 if missing:
-                    closed_at = now_iso()
-                    conn.execute(
-                        "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
-                        ("FAILED_CLOSED", closed_at, task_id),
-                    )
-                    self.add_event(
-                        conn,
-                        task_id,
-                        "runner",
-                        "STATE_CHANGED",
-                        {
-                            "from": current_state,
-                            "to": "FAILED_CLOSED",
-                            "reason": f"MISSING_EVIDENCE:{','.join(missing)}",
-                        },
+                    reason = f"MISSING_EVIDENCE:{','.join(missing)}"
+                    self._transition_with_conn(
+                        conn=conn,
+                        task_id=task_id,
+                        actor="runner",
+                        current_state=current_state,
+                        next_state="FAILED_CLOSED",
+                        reason=reason,
                     )
                     emit_anchor(
                         "evidence.fail_closed",
@@ -170,16 +167,13 @@ class RunnerDB:
                         {"missing": missing, "requested_next_state": next_state},
                     )
                     return
-            conn.execute(
-                "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
-                (next_state, now_iso(), task_id),
-            )
-            self.add_event(
-                conn,
-                task_id,
-                actor,
-                "STATE_CHANGED",
-                {"from": current_state, "to": next_state, "reason": reason},
+            self._transition_with_conn(
+                conn=conn,
+                task_id=task_id,
+                actor=actor,
+                current_state=current_state,
+                next_state=next_state,
+                reason=reason,
             )
             emit_anchor(
                 "state.transition",
@@ -355,27 +349,35 @@ class RunnerDB:
         )
 
     def update_evidence(self, task_id: str, **paths: str) -> None:
-        allowed_keys = {"prompt_path", "constraints_path", "decision_path", "patch_path", "log_path"}
+        allowed_keys = set(REQUIRED_EVIDENCE_KEYS)
         with self.connect() as conn:
             task = self._get_task_row(conn, task_id)
             if task is None:
                 raise ValueError(f"task not found: {task_id}")
             payload = json.loads(str(task["payload_json"]))
             evidence = payload.setdefault("evidence", {})
+            updated_fields: list[str] = []
             for key, value in paths.items():
                 if key in allowed_keys and value:
                     evidence[key] = value
+                    updated_fields.append(key)
             conn.execute(
                 "UPDATE tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(payload, ensure_ascii=True), now_iso(), task_id),
             )
-            self.add_event(conn, task_id, "runner", "EVIDENCE_UPDATED", {"fields": sorted(paths.keys())})
+            self.add_event(
+                conn,
+                task_id,
+                "runner",
+                "EVIDENCE_UPDATED",
+                {"fields": sorted(updated_fields)},
+            )
             emit_anchor(
                 "evidence.updated",
                 task_id,
                 str(task["state"]),
                 "EVIDENCE_UPDATED",
-                {"fields": sorted(paths.keys())},
+                {"fields": sorted(updated_fields)},
             )
 
     @staticmethod
@@ -406,7 +408,27 @@ class RunnerDB:
 
     @staticmethod
     def _missing_evidence_keys(payload_json: str) -> list[str]:
-        required = ["prompt_path", "constraints_path", "decision_path", "patch_path", "log_path"]
         payload = json.loads(payload_json)
         evidence = payload.get("evidence", {})
-        return [key for key in required if not str(evidence.get(key, "")).strip()]
+        return [key for key in REQUIRED_EVIDENCE_KEYS if not str(evidence.get(key, "")).strip()]
+
+    @staticmethod
+    def _transition_with_conn(
+        conn: sqlite3.Connection,
+        task_id: str,
+        actor: str,
+        current_state: str,
+        next_state: str,
+        reason: str,
+    ) -> None:
+        conn.execute(
+            "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+            (next_state, now_iso(), task_id),
+        )
+        RunnerDB.add_event(
+            conn,
+            task_id,
+            actor,
+            "STATE_CHANGED",
+            {"from": current_state, "to": next_state, "reason": reason},
+        )
