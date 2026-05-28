@@ -1,0 +1,31 @@
+"""Tests for deterministic CLI command."""
+
+from click.testing import CliRunner
+
+from cli_agent_orchestrator.cli.commands.deterministic import deterministic
+
+
+def test_cli_has_deterministic_command() -> None:
+    runner = CliRunner()
+    result = runner.invoke(deterministic, ["--help"])
+    assert result.exit_code == 0
+
+
+def test_deterministic_init_and_create_task(tmp_path) -> None:
+    runner = CliRunner()
+    db_path = str(tmp_path / "runner.db")
+    result_init = runner.invoke(deterministic, ["--db", db_path, "init-db"])
+    assert result_init.exit_code == 0
+
+    result_create = runner.invoke(
+        deterministic,
+        [
+            "--db",
+            db_path,
+            "create-task",
+            "--title",
+            "sample",
+        ],
+    )
+    assert result_create.exit_code == 0
+    assert result_create.output.strip() != ""

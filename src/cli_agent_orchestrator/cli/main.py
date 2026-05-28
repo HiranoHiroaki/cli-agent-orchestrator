@@ -3,6 +3,7 @@
 import click
 
 from cli_agent_orchestrator.cli.commands.env import env
+from cli_agent_orchestrator.cli.commands.deterministic import deterministic
 from cli_agent_orchestrator.cli.commands.flow import flow
 from cli_agent_orchestrator.cli.commands.info import info
 from cli_agent_orchestrator.cli.commands.init import init
@@ -34,6 +35,7 @@ cli.add_command(memory)
 cli.add_command(skills)
 cli.add_command(session)
 cli.add_command(terminal)
+cli.add_command(deterministic)
 
 
 if __name__ == "__main__":
