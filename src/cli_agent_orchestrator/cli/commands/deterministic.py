@@ -1,0 +1,293 @@
+"""Deterministic runner commands."""
+
+import json
+import re
+
+import click
+
+from cli_agent_orchestrator.deterministic_runner.db import (
+    DEFAULT_DB_PATH,
+    DEFAULT_LOCK_DIR,
+    RunnerDB,
+)
+from cli_agent_orchestrator.deterministic_runner.dispatch import run_agent
+from cli_agent_orchestrator.deterministic_runner.gateway import (
+    LocalModelBusyError,
+    LocalModelTimeoutError,
+)
+from cli_agent_orchestrator.deterministic_runner.lock_manager import LockManager, LockSpec
+from cli_agent_orchestrator.deterministic_runner.test_runner_mcp import run_allowlisted
+
+MAX_EVENT_OUTPUT_CHARS = 4000
+_REDACTION_PATTERNS = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(
+        r"(?i)(aws_secret_access_key|aws_session_token|api[_-]?key|token|password)\s*[:=]\s*([^\s]+)"
+    ),
+    re.compile(
+        r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----",
+        re.MULTILINE,
+    ),
+)
+
+
+@click.group()
+@click.option("--db", "db_path", default=DEFAULT_DB_PATH, show_default=True)
+@click.pass_context
+def deterministic(ctx: click.Context, db_path: str) -> None:
+    """Manage deterministic runner state machine."""
+    ctx.ensure_object(dict)
+    ctx.obj["db"] = RunnerDB(db_path=db_path)
+
+
+@deterministic.command("init-db")
+@click.pass_context
+def init_db(ctx: click.Context) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.init_db()
+    click.echo("initialized")
+
+
+@deterministic.command("create-task")
+@click.option("--title", required=True)
+@click.option("--owner", default="human")
+@click.option("--priority", default="normal")
+@click.option("--payload", default="{}")
+@click.pass_context
+def create_task(ctx: click.Context, title: str, owner: str, priority: str, payload: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    task_id = db.create_task(
+        title=title, owner=owner, priority=priority, payload=json.loads(payload)
+    )
+    click.echo(task_id)
+
+
+@deterministic.command("set-state")
+@click.option("--task-id", required=True)
+@click.option("--state", required=True)
+@click.option("--actor", default="runner")
+@click.option("--reason", default="")
+@click.pass_context
+def set_state(ctx: click.Context, task_id: str, state: str, actor: str, reason: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.set_state(task_id=task_id, next_state=state, actor=actor, reason=reason)
+    click.echo(f"{task_id}: {state}")
+
+
+@deterministic.command("show-task")
+@click.option("--task-id", required=True)
+@click.option("--view", type=click.Choice(["human", "agent"]), default="human")
+@click.pass_context
+def show_task(ctx: click.Context, task_id: str, view: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    if view == "agent":
+        try:
+            payload = db.get_agent_view(task_id)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+        click.echo(json.dumps(payload, ensure_ascii=True, indent=2))
+        return
+    task = db.get_task(task_id)
+    if task is None:
+        raise click.ClickException(f"task not found: {task_id}")
+    events = db.list_events(task_id)
+    click.echo(json.dumps({"task": task.__dict__, "events": events}, ensure_ascii=True, indent=2))
+
+
+@deterministic.command("set-evidence")
+@click.option("--task-id", required=True)
+@click.option("--prompt-path", default="")
+@click.option("--constraints-path", default="")
+@click.option("--decision-path", default="")
+@click.option("--patch-path", default="")
+@click.option("--log-path", default="")
+@click.pass_context
+def set_evidence(
+    ctx: click.Context,
+    task_id: str,
+    prompt_path: str,
+    constraints_path: str,
+    decision_path: str,
+    patch_path: str,
+    log_path: str,
+) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.update_evidence(
+        task_id,
+        prompt_path=prompt_path,
+        constraints_path=constraints_path,
+        decision_path=decision_path,
+        patch_path=patch_path,
+        log_path=log_path,
+    )
+    click.echo("evidence updated")
+
+
+@deterministic.command("enqueue-patch")
+@click.option("--task-id", required=True)
+@click.option("--patch-path", required=True)
+@click.option("--status", default="PROPOSED")
+@click.pass_context
+def enqueue_patch(ctx: click.Context, task_id: str, patch_path: str, status: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.enqueue_patch(task_id=task_id, patch_path=patch_path, status=status)
+    click.echo("patch queued")
+
+
+@deterministic.command("list-patches")
+@click.option("--status", default=None)
+@click.pass_context
+def list_patches(ctx: click.Context, status: str | None) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    click.echo(json.dumps(db.list_patches(status=status), ensure_ascii=True, indent=2))
+
+
+@deterministic.command("approve-patch")
+@click.option("--patch-id", required=True, type=int)
+@click.option("--approved-by", required=True)
+@click.pass_context
+def approve_patch(ctx: click.Context, patch_id: int, approved_by: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    try:
+        db.set_patch_status(patch_id, "APPROVED", approved_by=approved_by)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"approved: {patch_id}")
+
+
+@deterministic.command("reject-patch")
+@click.option("--patch-id", required=True, type=int)
+@click.option("--reason", required=True)
+@click.pass_context
+def reject_patch(ctx: click.Context, patch_id: int, reason: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.set_patch_status(patch_id, "REJECTED", reject_reason=reason)
+    click.echo(f"rejected: {patch_id}")
+
+
+@deterministic.command("apply-approved-patch")
+@click.option("--patch-id", required=True, type=int)
+@click.option("--actor", default="runner")
+@click.pass_context
+def apply_approved_patch(ctx: click.Context, patch_id: int, actor: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    try:
+        db.apply_patch(patch_id, actor=actor)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"apply attempted: {patch_id}")
+
+
+@deterministic.command("acquire-lock")
+@click.option("--kind", required=True, type=click.Choice(["repo", "file"]))
+@click.option("--resource", required=True)
+@click.option("--owner", default="runner")
+@click.option("--lock-dir", default=DEFAULT_LOCK_DIR, show_default=True)
+@click.pass_context
+def acquire_lock(ctx: click.Context, kind: str, resource: str, owner: str, lock_dir: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    manager = LockManager(lock_dir=lock_dir)
+    with db.connect() as conn:
+        locked = manager.acquire(conn, LockSpec(kind=kind, resource=resource, owner=owner))
+    if not locked:
+        raise click.ClickException("lock-busy")
+    click.echo("acquired")
+
+
+@deterministic.command("release-lock")
+@click.option("--kind", required=True, type=click.Choice(["repo", "file"]))
+@click.option("--resource", required=True)
+@click.option("--owner", default="runner")
+@click.option("--lock-dir", default=DEFAULT_LOCK_DIR, show_default=True)
+@click.pass_context
+def release_lock(ctx: click.Context, kind: str, resource: str, owner: str, lock_dir: str) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    manager = LockManager(lock_dir=lock_dir)
+    with db.connect() as conn:
+        manager.release(conn, LockSpec(kind=kind, resource=resource, owner=owner))
+    click.echo("released")
+
+
+@deterministic.command("dispatch-agent")
+@click.option("--task-id", required=True)
+@click.option("--agent", required=True)
+@click.option("--profile", required=True)
+@click.option("--lane-config", required=True)
+@click.option("--prompt-path", required=True)
+@click.option("--queue-depth", default=0, type=int)
+@click.pass_context
+def dispatch_agent(
+    ctx: click.Context,
+    task_id: str,
+    agent: str,
+    profile: str,
+    lane_config: str,
+    prompt_path: str,
+    queue_depth: int,
+) -> None:
+    db: RunnerDB = ctx.obj["db"]
+    db.set_state(task_id, "RUNNING_AGENT", actor="runner", reason="dispatch")
+    try:
+        result = run_agent(
+            profile,
+            lane_config,
+            agent,
+            prompt_path,
+            queue_depth,
+            task_id=task_id,
+            enforce_readonly_mcp=True,
+        )
+    except LocalModelBusyError:
+        db.log_event(task_id, "gateway", "LOCAL_MODEL_BUSY", {"queue_depth": queue_depth})
+        db.set_state(task_id, "LOCAL_MODEL_BUSY", actor="runner", reason="immediate reject")
+        raise click.ClickException("LOCAL_MODEL_BUSY")
+    except LocalModelTimeoutError:
+        db.log_event(task_id, "gateway", "LOCAL_MODEL_TIMEOUT", {})
+        db.set_state(task_id, "LOCAL_MODEL_TIMEOUT", actor="runner", reason="lane timeout")
+        raise click.ClickException("LOCAL_MODEL_TIMEOUT")
+    except ValueError as e:
+        db.log_event(task_id, "runner", "DISPATCH_POLICY_BLOCKED", {"error": str(e)})
+        db.set_state(task_id, "FAILED_CLOSED", actor="runner", reason="DISPATCH_POLICY_BLOCKED")
+        raise click.ClickException(str(e)) from e
+    except Exception as e:
+        db.log_event(task_id, "runner", "DISPATCH_ERROR", {"error": str(e)})
+        db.set_state(task_id, "FAILED_CLOSED", actor="runner", reason="DISPATCH_ERROR")
+        raise click.ClickException(str(e)) from e
+
+    db.log_event(
+        task_id,
+        actor=agent,
+        event_type="AGENT_DISPATCH_RESULT",
+        detail={
+            "exit_code": result.returncode,
+            "stdout": _sanitize_output(result.stdout),
+            "stderr": _sanitize_output(result.stderr),
+            "stdout_length": len(result.stdout or ""),
+            "stderr_length": len(result.stderr or ""),
+        },
+    )
+    if result.returncode != 0:
+        db.set_state(task_id, "FAILED_CLOSED", actor="runner", reason="AGENT_EXIT_NONZERO")
+    elif agent.startswith("codex"):
+        db.set_state(task_id, "PATCH_PROPOSED", actor="runner", reason="proposal captured")
+    else:
+        db.set_state(task_id, "NEEDS_HUMAN_DECISION", actor="runner", reason="review completed")
+    click.echo("dispatched")
+
+
+@deterministic.command("run-test-command")
+@click.option("--key", required=True)
+def run_test_command(key: str) -> None:
+    result = run_allowlisted(key)
+    click.echo(result.stdout, nl=False)
+    if result.returncode != 0:
+        raise click.ClickException(f"test command failed: {key}")
+
+
+def _sanitize_output(text: str | None) -> str:
+    value = text or ""
+    for pattern in _REDACTION_PATTERNS:
+        value = pattern.sub("[REDACTED]", value)
+    if len(value) > MAX_EVENT_OUTPUT_CHARS:
+        value = value[:MAX_EVENT_OUTPUT_CHARS] + "\n...[TRUNCATED]..."
+    return value

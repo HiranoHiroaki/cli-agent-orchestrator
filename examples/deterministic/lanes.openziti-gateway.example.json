@@ -1,0 +1,29 @@
+{
+  "default_timeout_ms": 45000,
+  "gateway": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8080",
+    "health_path": "/health",
+    "chat_path": "/v1/chat/completions",
+    "api_key": "not-needed",
+    "probe_chat": true,
+    "probe_prompt": "health probe",
+    "probe_max_tokens": 1,
+    "busy_status_codes": [429, 503]
+  },
+  "lanes": {
+    "code": {
+      "max_queue": 4,
+      "timeout_ms": 60000,
+      "reject_on_queue_full": true,
+      "model": "gpt-oss:120b"
+    },
+    "review": {
+      "max_queue": 4,
+      "timeout_ms": 30000,
+      "reject_on_queue_full": true,
+      "model": "qwen3.5:latest"
+    }
+  }
+}
+
