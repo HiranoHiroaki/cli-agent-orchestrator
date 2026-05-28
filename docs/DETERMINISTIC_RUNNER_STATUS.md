@@ -32,6 +32,7 @@
 - `src/cli_agent_orchestrator/deterministic_runner/gateway.py`
 - `LOCAL_MODEL_BUSY` 即 reject（待機ループなし）
 - `LOCAL_MODEL_TIMEOUT` 遷移接続
+- `openziti/llm-gateway` 向け sidecar probe 接続（`/health`, `/v1/chat/completions`）
 
 4. 状態機械と失敗可視化:
 - `src/cli_agent_orchestrator/deterministic_runner/state_machine.py`
@@ -60,6 +61,9 @@
 - 並行write事故防止のため必要
 4. `test_runner_mcp.py` allowlist:
 - MCP実行境界の最低限として必要
+5. read-only MCP ポリシー:
+- deterministic dispatch 時に `allowed_tools` と `mcp_servers` を強制検証
+- `repo-read` 以外を fail-close
 
 ### 条件付きで残す（運用限定）
 1. `debug.py` のアンカー:
@@ -98,12 +102,12 @@
 3. debugの既定OFF運用をドキュメント化
 
 ### P1（次ステップ）
-1. `openziti/llm-gateway` 実接続
-2. lane別 reject/timeout をE2E確認
+1. `openziti/llm-gateway` 実接続: 実装済み（probe）
+2. lane別 reject/timeout をE2E確認: 未完（統合テストが残り）
 
 ### P2（その次）
-1. MCP read-only プロファイル固定 (`repo-read` のみ)
-2. write系MCPの拒否監査ログ追加
+1. MCP read-only プロファイル固定 (`repo-read` のみ): 実装済み（dispatch policy）
+2. write系MCPの拒否監査ログ追加: 実装済み（policy block event）
 
 ## 7. 受け入れ条件との対応
 - 状態遷移はRunnerのみ: 達成

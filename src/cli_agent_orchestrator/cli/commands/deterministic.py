@@ -200,6 +200,7 @@ def release_lock(
 @click.option("--lane-config", required=True)
 @click.option("--prompt-path", required=True)
 @click.option("--queue-depth", default=0, type=int)
+@click.option("--readonly-mcp/--no-readonly-mcp", default=True)
 @click.pass_context
 def dispatch_agent(
     ctx: click.Context,
@@ -209,6 +210,7 @@ def dispatch_agent(
     lane_config: str,
     prompt_path: str,
     queue_depth: int,
+    readonly_mcp: bool,
 ) -> None:
     db: RunnerDB = ctx.obj["db"]
     db.set_state(task_id, "RUNNING_AGENT", actor="runner", reason="dispatch")
@@ -220,6 +222,7 @@ def dispatch_agent(
             prompt_path,
             queue_depth,
             task_id=task_id,
+            enforce_readonly_mcp=readonly_mcp,
         )
     except LocalModelBusyError:
         db.log_event(task_id, "gateway", "LOCAL_MODEL_BUSY", {"queue_depth": queue_depth})
@@ -229,6 +232,14 @@ def dispatch_agent(
         db.log_event(task_id, "gateway", "LOCAL_MODEL_TIMEOUT", {})
         db.set_state(task_id, "LOCAL_MODEL_TIMEOUT", actor="runner", reason="lane timeout")
         raise click.ClickException("LOCAL_MODEL_TIMEOUT")
+    except ValueError as e:
+        db.log_event(task_id, "runner", "DISPATCH_POLICY_BLOCKED", {"error": str(e)})
+        db.set_state(task_id, "FAILED_CLOSED", actor="runner", reason="DISPATCH_POLICY_BLOCKED")
+        raise click.ClickException(str(e)) from e
+    except Exception as e:
+        db.log_event(task_id, "runner", "DISPATCH_ERROR", {"error": str(e)})
+        db.set_state(task_id, "FAILED_CLOSED", actor="runner", reason="DISPATCH_ERROR")
+        raise click.ClickException(str(e)) from e
 
     db.log_event(
         task_id,

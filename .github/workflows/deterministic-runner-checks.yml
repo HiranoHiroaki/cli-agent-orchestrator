@@ -25,5 +25,7 @@ jobs:
         run: |
           uv run pytest test/cli/commands/test_deterministic.py \
             test/deterministic_runner/test_state_machine.py \
-            test/deterministic_runner/test_runner_features.py
-
+            test/deterministic_runner/test_runner_features.py \
+            test/deterministic_runner/test_gateway_sidecar.py \
+            test/deterministic_runner/test_readonly_policy.py \
+            test/deterministic_runner/test_dispatch_policy.py

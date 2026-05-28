@@ -1,0 +1,17 @@
+{
+  "agents": {
+    "codex_worker": {
+      "command": "codex --profile local-codex",
+      "lane": "code",
+      "allowed_tools": ["fs_read", "fs_list", "@repo-read"],
+      "mcp_servers": ["repo-read"]
+    },
+    "claude_worker": {
+      "command": "claude --model qwen3.5",
+      "lane": "review",
+      "allowed_tools": ["fs_read", "fs_list", "@repo-read"],
+      "mcp_servers": ["repo-read"]
+    }
+  }
+}
+

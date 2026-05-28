@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
+import requests
+
 from cli_agent_orchestrator.deterministic_runner.debug import emit_anchor
 
 
@@ -20,6 +22,19 @@ class LocalModelBusyError(RuntimeError):
 
 class LocalModelTimeoutError(RuntimeError):
     """Raised when local model call exceeded lane timeout."""
+
+
+@dataclass
+class GatewayConfig:
+    enabled: bool
+    base_url: str
+    health_path: str
+    chat_path: str
+    api_key: str
+    probe_chat: bool
+    probe_prompt: str
+    probe_max_tokens: int
+    busy_status_codes: tuple[int, ...]
 
 
 def _read_json(path: str) -> dict[str, Any]:
@@ -57,3 +72,110 @@ def enforce_queue_reject(policy: LanePolicy, queue_depth: int, task_id: str = ""
                 {"queue_depth": queue_depth, "max_queue": policy.max_queue},
             )
         raise LocalModelBusyError("LOCAL_MODEL_BUSY")
+
+
+def load_gateway_config(config_path: str) -> GatewayConfig:
+    cfg = _read_json(config_path)
+    raw = cfg.get("gateway", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    busy_codes_raw = raw.get("busy_status_codes", [429, 503])
+    if not isinstance(busy_codes_raw, list):
+        busy_codes_raw = [429, 503]
+    return GatewayConfig(
+        enabled=bool(raw.get("enabled", False)),
+        base_url=str(raw.get("base_url", "")).strip().rstrip("/"),
+        health_path=str(raw.get("health_path", "/health")).strip(),
+        chat_path=str(raw.get("chat_path", "/v1/chat/completions")).strip(),
+        api_key=str(raw.get("api_key", "")).strip(),
+        probe_chat=bool(raw.get("probe_chat", True)),
+        probe_prompt=str(raw.get("probe_prompt", "ping")).strip() or "ping",
+        probe_max_tokens=int(raw.get("probe_max_tokens", 1)),
+        busy_status_codes=tuple(int(code) for code in busy_codes_raw),
+    )
+
+
+def probe_gateway_sidecar(
+    config_path: str,
+    lane_name: str,
+    timeout_ms: int,
+    task_id: str = "",
+) -> None:
+    lane_cfg = _read_json(config_path).get("lanes", {})
+    lane = lane_cfg.get(lane_name, {}) if isinstance(lane_cfg, dict) else {}
+    gateway = load_gateway_config(config_path)
+    if not gateway.enabled:
+        return
+    if not gateway.base_url:
+        raise RuntimeError("GATEWAY_CONFIG_ERROR: base_url missing")
+    model = str(lane.get("model", "")).strip() if isinstance(lane, dict) else ""
+    timeout_sec = max(1.0, timeout_ms / 1000)
+    headers = {"Content-Type": "application/json"}
+    if gateway.api_key:
+        headers["Authorization"] = f"Bearer {gateway.api_key}"
+    try:
+        health = requests.get(
+            f"{gateway.base_url}{gateway.health_path}",
+            timeout=min(timeout_sec, 5.0),
+        )
+    except requests.Timeout as exc:
+        raise LocalModelTimeoutError("LOCAL_MODEL_TIMEOUT") from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(f"GATEWAY_UNREACHABLE: {exc}") from exc
+    if health.status_code != 200:
+        raise RuntimeError(f"GATEWAY_UNHEALTHY: {health.status_code}")
+    if task_id:
+        emit_anchor(
+            "gateway.health.ok",
+            task_id,
+            "RUNNING_AGENT",
+            "GATEWAY_HEALTH_OK",
+            {"status_code": health.status_code},
+        )
+    if not gateway.probe_chat or not model:
+        return
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": gateway.probe_prompt}],
+        "max_tokens": gateway.probe_max_tokens,
+        "stream": False,
+    }
+    try:
+        resp = requests.post(
+            f"{gateway.base_url}{gateway.chat_path}",
+            headers=headers,
+            json=body,
+            timeout=timeout_sec,
+        )
+    except requests.Timeout as exc:
+        raise LocalModelTimeoutError("LOCAL_MODEL_TIMEOUT") from exc
+    except requests.RequestException as exc:
+        raise RuntimeError(f"GATEWAY_REQUEST_FAILED: {exc}") from exc
+
+    if resp.status_code in gateway.busy_status_codes:
+        raise LocalModelBusyError("LOCAL_MODEL_BUSY")
+    if resp.status_code in {408, 504}:
+        raise LocalModelTimeoutError("LOCAL_MODEL_TIMEOUT")
+
+    response_text = ""
+    try:
+        payload = resp.json()
+        response_text = json.dumps(payload, ensure_ascii=True).lower()
+    except ValueError:
+        response_text = resp.text.lower()
+
+    if "local_model_busy" in response_text or "queue" in response_text and "full" in response_text:
+        raise LocalModelBusyError("LOCAL_MODEL_BUSY")
+    if "timeout" in response_text and resp.status_code >= 400:
+        raise LocalModelTimeoutError("LOCAL_MODEL_TIMEOUT")
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GATEWAY_ERROR: {resp.status_code}")
+
+    if task_id:
+        emit_anchor(
+            "gateway.probe.ok",
+            task_id,
+            "RUNNING_AGENT",
+            "GATEWAY_PROBE_OK",
+            {"status_code": resp.status_code, "lane": lane_name},
+        )
